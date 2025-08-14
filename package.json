@@ -5,12 +5,16 @@
   "license": "ISC",
   "author": "Francisco Rojas",
   "type": "module",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "main": "dist/logger.js",
   "types": "dist/logger.d.ts",
   "scripts": {
     "build": "tsc",
     "prepare": "npm run build",
-  "test": "npm run build && node --version && npx jest --config=jest.config.mjs --runInBand"
+    "test": "npm run build && node --version && npx jest --config=jest.config.mjs --runInBand"
   },
   "keywords": [
     "logger",

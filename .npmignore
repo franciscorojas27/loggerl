@@ -1,0 +1,5 @@
+src/
+test/
+jest.config.*
+tsconfig.json
+node_modules
