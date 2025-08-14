@@ -1,0 +1,33 @@
+{
+  "name": "loggerl",
+  "version": "1.0.0",
+  "description": "Advanced logger with file rotation, optional JSON output, color-coded levels, safe stringify, global console patching, and support for capturing external processes and third-party log files.",
+  "license": "ISC",
+  "author": "Francisco Rojas",
+  "type": "module",
+  "main": "dist/logger.js",
+  "types": "dist/logger.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "prepare": "npm run build",
+  "test": "npm run build && node --version && npx jest --config=jest.config.mjs --runInBand"
+  },
+  "keywords": [
+    "logger",
+    "typescript",
+    "rotation",
+    "json",
+    "debug",
+    "pro"
+  ],
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "jest": "^30.0.5",
+    "ts-jest": "^29.4.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  }
+}
