@@ -14,16 +14,8 @@ const ENV = process.env.NODE_ENV || "development";
 const ENABLE_DEBUG = ENV === "development";
 const USE_JSON = process.env.LOG_JSON === "true";
 
-let stream = fs.createWriteStream(getLogFile(), { flags: "a" });
-stream.on("error", (err) => process.stdout.write(`[LOGGER ERROR] ${err}\n`));
-
-const colors: Record<LogLevel | "reset", string> = {
-  info: "\x1b[32m",
-  warn: "\x1b[33m",
-  error: "\x1b[31m",
-  debug: "\x1b[36m",
-  reset: "\x1b[0m",
-};
+let stream: fs.WriteStream;
+let currentFile: string;
 
 function getDateString(): string {
   const now = new Date();
@@ -32,22 +24,47 @@ function getDateString(): string {
     .padStart(2, "0")}-${now.getDate().toString().padStart(2, "0")}`;
 }
 
-function getLogFile(): string {
+function getTimeString(): string {
+  const now = new Date();
+  return `${now.getHours().toString().padStart(2, "0")}-${now
+    .getMinutes()
+    .toString()
+    .padStart(2, "0")}-${now.getSeconds().toString().padStart(2, "0")}`;
+}
+
+function createLogFile(): string {
   const dateStr = getDateString();
+  const timeStr = getTimeString();
   const files = fs
     .readdirSync(logDir)
     .filter((f) => f.startsWith(`app-${process.pid}-${dateStr}`))
     .sort();
-  const latest = files.pop() ?? `app-${process.pid}-${dateStr}-1.log`;
-  const fullPath = path.join(logDir, latest);
-  if (fs.existsSync(fullPath) && fs.statSync(fullPath).size > MAX_FILE_SIZE) {
-    const lastPart = latest.split("-").pop();
-    const numPart = lastPart?.split(".")[0];
-    const num = (parseInt(numPart ?? "0", 10) || 0) + 1;
-    return path.join(logDir, `app-${process.pid}-${dateStr}-${num}.log`);
+
+  let latest = files.pop();
+  if (!latest) {
+    latest = `app-${process.pid}-${dateStr}-${timeStr}-1.log`;
   }
+
+  const fullPath = path.join(logDir, latest);
+  if (!fs.existsSync(fullPath) || fs.statSync(fullPath).size > MAX_FILE_SIZE) {
+    const numPart = latest.split("-").pop()?.split(".")[0] || "0";
+    const num = parseInt(numPart, 10) + 1;
+    return path.join(
+      logDir,
+      `app-${process.pid}-${dateStr}-${timeStr}-${num}.log`
+    );
+  }
+
   return fullPath;
 }
+
+function initStream() {
+  currentFile = createLogFile();
+  stream = fs.createWriteStream(currentFile, { flags: "a" });
+  stream.on("error", (err) => process.stdout.write(`[LOGGER ERROR] ${err}\n`));
+}
+
+initStream();
 
 function safeStringify(obj: LogMessage, maxLength = 1000): string {
   try {
@@ -61,28 +78,39 @@ function safeStringify(obj: LogMessage, maxLength = 1000): string {
 }
 
 function rotateIfNeeded() {
-  const streamPath = stream.path?.toString();
-  if (
-    streamPath &&
-    fs.existsSync(streamPath) &&
-    fs.statSync(streamPath).size > MAX_FILE_SIZE
-  ) {
-    stream.end();
-    stream = fs.createWriteStream(getLogFile(), { flags: "a" });
+  if (!stream || !fs.existsSync(currentFile)) {
+    initStream();
+    return;
   }
+  if (fs.statSync(currentFile).size > MAX_FILE_SIZE) {
+    stream.end();
+    initStream();
+  }
+
+  const dateStr = getDateString();
   const files = fs
     .readdirSync(logDir)
-    .filter((f) => f.startsWith(`app-${process.pid}-${getDateString()}`))
+    .filter((f) => f.startsWith(`app-${process.pid}-${dateStr}`))
     .sort();
   while (files.length > MAX_FILES) {
     fs.unlinkSync(path.join(logDir, files.shift()!));
   }
 }
 
+const colors: Record<LogLevel | "reset", string> = {
+  info: "\x1b[32m",
+  warn: "\x1b[33m",
+  error: "\x1b[31m",
+  debug: "\x1b[36m",
+  reset: "\x1b[0m",
+};
+
 function writeLog(level: LogLevel, message: LogMessage) {
   if (level === "debug" && !ENABLE_DEBUG) return;
+
   const timestamp = new Date().toISOString();
   const pid = process.pid;
+
   let line: string;
   if (USE_JSON) {
     line =
@@ -99,7 +127,9 @@ function writeLog(level: LogLevel, message: LogMessage) {
     )}\n`;
     process.stdout.write(`${color}${line}${colors.reset}`);
   }
+
   rotateIfNeeded();
+
   if (!stream.write(line)) stream.once("drain", () => {});
 }
 
@@ -111,28 +141,44 @@ export const logger = {
 };
 
 function flushAndExit() {
-  stream.end(() => process.exit());
+  if (stream) stream.end(() => process.exit());
 }
+
 process.on("SIGINT", flushAndExit);
 process.on("SIGTERM", flushAndExit);
 process.on("exit", () => stream.end());
 
+// Patch global console
 console.log = (...args: any[]) => logger.info(args);
 console.warn = (...args: any[]) => logger.warn(args);
 console.error = (...args: any[]) => logger.error(args);
 console.debug = (...args: any[]) => logger.debug(args);
 
 export function captureProcess(proc: ChildProcess) {
-  proc.stdout?.on("data", (data) => logger.info(data.toString()));
-  proc.stderr?.on("data", (data) => logger.error(data.toString()));
+  const stdoutListener = (data: Buffer) => logger.info(data.toString());
+  const stderrListener = (data: Buffer) => logger.error(data.toString());
+
+  proc.stdout?.on("data", stdoutListener);
+  proc.stderr?.on("data", stderrListener);
+
+  // Return a cleanup function
+  return () => {
+    proc.stdout?.off("data", stdoutListener);
+    proc.stderr?.off("data", stderrListener);
+  };
 }
 
 export function captureFile(filePath: string, interval = 5000) {
   if (!fs.existsSync(filePath)) return;
-  setInterval(() => {
+
+  const timer = setInterval(() => {
     try {
+      if (!fs.existsSync(filePath)) return;
       const data = fs.readFileSync(filePath, "utf-8");
       if (data) logger.info(`Logs de archivo ${filePath}: ${data}`);
     } catch {}
   }, interval);
+
+  // Return cleanup
+  return () => clearInterval(timer);
 }
